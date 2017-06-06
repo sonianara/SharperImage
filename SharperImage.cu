@@ -79,19 +79,23 @@ void postProcess(const std::string& output_file) {
 	cudaFree(d_greyImage__);
 
 }
+
+__device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
+__device__  int indexBounds(int ndx, int maxNdx) {
+   return ndx > (maxNdx - 1) ? (maxNdx - 1) : (ndx < 0 ? 0 : ndx);
+}
+
+__device__ int linearize(int c, int r, int w, int h) {
+   return indexBounds(c, w) + indexBounds(r, h)*w;
+}
+
 __global__
 void conv1D(const uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int numCols)
 {
 
-	//TODO Fill in the kernel to blur original image
-	// Original Image is an array, each element of the array has 4 components .z -> R (red); .y -> G (Green) ; .x -> B (blue); .w -> A (alpha, you can ignore this one)
-	//so you can read one input pixel like this:
-        //B = rgbaImage[currow * numCols + curcol].x*M_d[curcolkernel]; 
-	//G = rgbaImage[currow * numCols + curcol].y*M_d[curcolkernel];
-	//R = rgbaImage[currow * numCols + curcol].z*M_d[curcolkernel];
 	int pix_x = (blockIdx.x * blockDim.x) + threadIdx.x;
 	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
-	int cur_x;
+   int 
 	
 	uchar4 blurVal = {0,0,0,1};
 	for (int i = -2; i <= 2; i++) {
@@ -105,31 +109,6 @@ void conv1D(const uchar4* const rgbaImage,uchar4* const greyImage,int numRows, i
 	greyImage[pix_y * numCols + pix_x] = blurVal;
 }
 
-__global__
-void conv1DCol(const uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int numCols)
-{
-
-	//TODO Fill in the kernel to blur original image
-	// Original Image is an array, each element of the array has 4 components .z -> R (red); .y -> G (Green) ; .x -> B (blue); .w -> A (alpha, you can ignore this one)
-	//so you can read one input pixel like this:
-        //B = rgbaImage[currow * numCols + curcol].x*M_d[curcolkernel]; 
-	//G = rgbaImage[currow * numCols + curcol].y*M_d[curcolkernel];
-	//R = rgbaImage[currow * numCols + curcol].z*M_d[curcolkernel];
-	int pix_x = (blockIdx.x * blockDim.x) + threadIdx.x;
-	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
-	int cur_y;
-	
-	uchar4 blurVal = {0,0,0,1};	
-	for (int i = -2; i <= 2; i++) {
-		cur_y = pix_y + i;
-		if (cur_y >= 0 && cur_y<numRows) {
-			blurVal.x += rgbaImage[cur_y * numCols + pix_x].x * M_d[i + 2];
-			blurVal.y += rgbaImage[cur_y * numCols + pix_x].y * M_d[i + 2];
-			blurVal.z += rgbaImage[cur_y * numCols + pix_x].z * M_d[i + 2];
-		}
-	}
-	greyImage[pix_y * numCols + pix_x] = blurVal;
-}
 
 void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage,
 							uchar4 * d_rgbaImage,
