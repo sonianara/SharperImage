@@ -81,6 +81,16 @@ void postProcess(const std::string& output_file) {
 	cudaFree(d_greyImage__);
 
 }
+
+__device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
+__device__  int indexBounds(int ndx, int maxNdx) {
+   return ndx > (maxNdx - 1) ? (maxNdx - 1) : (ndx < 0 ? 0 : ndx);
+}
+
+__device__ int linearize(int c, int r, int w, int h) {
+   return indexBounds(c, w) + indexBounds(r, h)*w;
+}
+
 __global__
 void conv1D(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int numCols)
 {
