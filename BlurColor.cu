@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 
-#define BLUR_SIZE 5
+#define BLUR_SIZE 9
 #define USE_2D 0
 
 //define the storage for the blur kernel in GPU Constant Memory
@@ -103,60 +103,25 @@ void conv1D(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int num
 	//R = rgbaImage[currow * numCols + curcol].z*M_d[curcolkernel];
 	int pix_x = (blockIdx.x * blockDim.x) + threadIdx.x;
 	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
-	int cur_x;
-	
-	float blurValx = 0;
-	float blurValy = 0;
-	float blurValz = 0;
-	float blurValw = 1;
 
 	if (pix_x >= 0 && pix_x < numCols && pix_y >= 0 && pix_y < numRows) { 
-		for (int i = -2; i <= 2; i++) {
-			cur_x = pix_x + i;
-			if (cur_x >= 0 && cur_x < numCols) {
-				blurValx += rgbaImage[pix_y * numCols + cur_x].x * M_d[i+2];
-				blurValy += rgbaImage[pix_y * numCols + cur_x].y * M_d[i+2];
-				blurValz += rgbaImage[pix_y * numCols + cur_x].z * M_d[i+2];
+      int oneD = linearize(pix_x, pix_y, numCols, numRows);	
+	   float blurValx = 0;
+	   float blurValy = 0;
+	   float blurValz = 0;
+      for (int i = -1; i <= 1; ++i) {
+         for (int j = -1; j <= 1; ++j) {
+            int imgNdx = linearize(pix_x + j, pix_y + i, numCols, numRows);
+            int filterNdx = linearize(1 +j, 1+ i, 3, 3);
+            int weight = M_d[filterNdx];
+				blurValx += rgbaImage[imgNdx].x * weight;
+				blurValy += rgbaImage[imgNdx].y * weight;
+				blurValz += rgbaImage[imgNdx].z * weight;
 			}
 		}
-		greyImage[pix_y * numCols + pix_x].x = (int)blurValx;
-		greyImage[pix_y * numCols + pix_x].y = (int)blurValy;
-		greyImage[pix_y * numCols + pix_x].z = (int)blurValz;
-		greyImage[pix_y * numCols + pix_x].w = (int)blurValw;
-	}
-}
-
-__global__
-void conv1DCol(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int numCols)
-{
-
-	//TODO Fill in the kernel to blur original image
-	// Original Image is an array, each element of the array has 4 components .z -> R (red); .y -> G (Green) ; .x -> B (blue); .w -> A (alpha, you can ignore this one)
-	//so you can read one input pixel like this:
-        //B = rgbaImage[currow * numCols + curcol].x*M_d[curcolkernel]; 
-	//G = rgbaImage[currow * numCols + curcol].y*M_d[curcolkernel];
-	//R = rgbaImage[currow * numCols + curcol].z*M_d[curcolkernel];
-	int pix_x = (blockIdx.x * blockDim.x) + threadIdx.x;
-	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
-	int cur_y;
-	
-	float blurValx = 0;
-	float blurValy = 0;
-	float blurValz = 0;
-	float blurValw = 1;
-	if (pix_x >= 0 && pix_x < numCols && pix_y >= 0 && pix_y < numRows) { 
-		for (int i = -2; i <= 2; i++) {
-			cur_y = pix_y + i;
-			if (cur_y >= 0 && cur_y<numRows) {
-				blurValx += rgbaImage[cur_y * numCols + pix_x].x * M_d[i + 2];
-				blurValy += rgbaImage[cur_y * numCols + pix_x].y * M_d[i + 2];
-				blurValz += rgbaImage[cur_y * numCols + pix_x].z * M_d[i + 2];
-			}
-		}
-		greyImage[pix_y * numCols + pix_x].x = (int)blurValx;
-		greyImage[pix_y * numCols + pix_x].y = (int)blurValy;
-		greyImage[pix_y * numCols + pix_x].z = (int)blurValz;
-		greyImage[pix_y * numCols + pix_x].w = (int)blurValw;
+		greyImage[pix_y * numCols + pix_x].x = check((int)blurValx);
+		greyImage[pix_y * numCols + pix_x].y = check((int)blurValy);
+		greyImage[pix_y * numCols + pix_x].z = check((int)blurValz);
 	}
 }
 
@@ -166,7 +131,7 @@ void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage,
 							size_t numRows,
 							size_t numCols)
 {
-	float M_h[BLUR_SIZE]={0.0625, 0.25, 0.375, 0.25, 0.0625};  //change this to whatever 1D filter you are using
+	float M_h[BLUR_SIZE]={-1.0, -1.0, -1.0, -1.0, 9.0, -1.0, -1.0, -1.0, -1.0};  //change this to whatever 1D filter you are using
 	cudaMemcpyToSymbol(M_d,M_h, BLUR_SIZE*sizeof(float)); //allocates/copy to Constant Memory on the GPU
 	//temp image
 	uchar4 *d_greyImageTemp;
@@ -180,14 +145,9 @@ void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage,
 	const dim3 gridSize(gridSizeX, gridSizeY, 1);
 	for (int i=0;i<30;i++){
 		//row
-		conv1D<<<gridSize, blockSize>>>(d_rgbaImage,d_greyImageTemp,numRows,numCols);
-		cudaDeviceSynchronize();
-		//col
-		conv1DCol<<<gridSize, blockSize>>>(d_greyImageTemp,d_greyImage,numRows,numCols);
+		conv1D<<<gridSize, blockSize>>>(d_rgbaImage,d_greyImage,numRows,numCols);
 		cudaDeviceSynchronize();
 
-		//swap
-		d_rgbaImage=d_greyImage;
 	}
 
 }
