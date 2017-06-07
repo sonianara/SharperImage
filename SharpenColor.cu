@@ -4,7 +4,7 @@
 #include <iostream>
 #include <numeric>
 #include <stdlib.h>
-
+#include <sys/time.h>
 
 #define BLUR_SIZE 9
 #define USE_2D 0
@@ -14,6 +14,7 @@ __constant__ float M_d[BLUR_SIZE];
 
 cv::Mat imageRGBA;
 cv::Mat imageGrey;
+cv::Mat imageLin;
 cv::Mat image;
 uchar4 *d_rgbaImage__;
 uchar4 *d_greyImage__;
@@ -23,10 +24,25 @@ size_t numCols() { return imageRGBA.cols; }
 const long numPixels = numRows() * numCols();
 
 
+//
+// dtime -
+//
+// utility routine to return
+// the current wall clock time
+//
+double dtime()
+{
+        double tseconds = 0.0;
+        struct timeval mytime;
+        gettimeofday(&mytime,(struct timezone*)0);
+        tseconds = (double)(mytime.tv_sec + mytime.tv_usec*1.0e-6);
+        return( tseconds );
+}
+
 //returns a pointer to an RGBA version of the input image
 //and a pointer to the single channel grey-scale output
 //on both the host and device
-void preProcess(uchar4 **inputImage, uchar4 **greyImage,
+void preProcess(uchar4 **inputImage, uchar4 **greyImage, uchar4 **linImage,
 				uchar4 **d_rgbaImage, uchar4 **d_greyImage,
 				const std::string &filename) {
 	//make sure the context initializes ok
@@ -41,6 +57,7 @@ void preProcess(uchar4 **inputImage, uchar4 **greyImage,
 
 	//allocate memory for the output
 	imageRGBA.copyTo(imageGrey);
+        imageRGBA.copyTo(imageLin);
 	//This shouldn't ever happen given the way the images are created
 	//at least based upon my limited understanding of OpenCV, but better to check
 	if (!imageRGBA.isContinuous() || !imageGrey.isContinuous()) {
@@ -49,6 +66,7 @@ void preProcess(uchar4 **inputImage, uchar4 **greyImage,
 	}
 	*inputImage = (uchar4 *)imageRGBA.ptr<unsigned char>(0);
 	*greyImage  = (uchar4 *)imageGrey.ptr<unsigned char>(0);
+	*linImage  = (uchar4 *)imageLin.ptr<unsigned char>(0);
 	const size_t numPixels = numRows() * numCols();
 
 	//allocate memory on the device for both input and output
@@ -82,12 +100,12 @@ void postProcess(const std::string& output_file) {
 
 }
 
-__device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
-__device__  int indexBounds(int ndx, int maxNdx) {
+__host__ __device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
+__host__ __device__  int indexBounds(int ndx, int maxNdx) {
    return ndx > (maxNdx - 1) ? (maxNdx - 1) : (ndx < 0 ? 0 : ndx);
 }
 
-__device__ int linearize(int c, int r, int w, int h) {
+__host__ __device__ int linearize(int c, int r, int w, int h) {
    return indexBounds(c, w) + indexBounds(r, h)*w;
 }
 
@@ -105,15 +123,15 @@ void conv1D(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int num
 	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
 
 	if (pix_x >= 0 && pix_x < numCols && pix_y >= 0 && pix_y < numRows) { 
-      int oneD = linearize(pix_x, pix_y, numCols, numRows);	
-	   float blurValx = 0;
-	   float blurValy = 0;
-	   float blurValz = 0;
-      for (int i = -1; i <= 1; ++i) {
-         for (int j = -1; j <= 1; ++j) {
-            int imgNdx = linearize(pix_x + j, pix_y + i, numCols, numRows);
-            int filterNdx = linearize(1 +j, 1+ i, 3, 3);
-            int weight = M_d[filterNdx];
+		int oneD = linearize(pix_x, pix_y, numCols, numRows);	
+		float blurValx = 0;
+		float blurValy = 0;
+		float blurValz = 0;
+		for (int i = -1; i <= 1; ++i) {
+			for (int j = -1; j <= 1; ++j) {
+				int imgNdx = linearize(pix_x + j, pix_y + i, numCols, numRows);
+				int filterNdx = linearize(1 +j, 1+ i, 3, 3);
+				int weight = M_d[filterNdx];
 				blurValx += rgbaImage[imgNdx].x * weight;
 				blurValy += rgbaImage[imgNdx].y * weight;
 				blurValz += rgbaImage[imgNdx].z * weight;
@@ -122,6 +140,32 @@ void conv1D(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int num
 		greyImage[pix_y * numCols + pix_x].x = check((int)blurValx);
 		greyImage[pix_y * numCols + pix_x].y = check((int)blurValy);
 		greyImage[pix_y * numCols + pix_x].z = check((int)blurValz);
+	}
+}
+
+// Takes an input image and places the sharpened version in outImage
+void linearSharpen(const uchar4 *inImage, uchar4 *outImage,
+		size_t numRows, size_t numCols, float *linFilter) {
+
+	for (int pix_y = 0; pix_y < numRows; pix_y++) {
+		for (int pix_x = 0; pix_x < numCols; pix_x++) {
+			float blurValx = 0;
+			float blurValy = 0;
+			float blurValz = 0;
+			for (int i = -1; i <= 1; ++i) {
+				for (int j = -1; j <= 1; ++j) {
+					int imgNdx = linearize(pix_x + j, pix_y + i, numCols, numRows);
+					int filterNdx = linearize(1 +j, 1+ i, 3, 3);
+					int weight = linFilter[filterNdx];
+					blurValx += inImage[imgNdx].x * weight;
+					blurValy += inImage[imgNdx].y * weight;
+					blurValz += inImage[imgNdx].z * weight;
+				}
+			}
+			outImage[pix_y * numCols + pix_x].x = check((int)blurValx);
+			outImage[pix_y * numCols + pix_x].y = check((int)blurValy);
+			outImage[pix_y * numCols + pix_x].z = check((int)blurValz);
+		}
 	}
 }
 
@@ -157,6 +201,7 @@ int main(int argc, char **argv) {
 
 	uchar4 *h_rgbaImage, *d_rgbaImage;
 	uchar4 *h_greyImage, *d_greyImage;
+        uchar4 *h_linImage;
 	std::string input_file;
 	std::string output_file;
 
@@ -170,12 +215,19 @@ int main(int argc, char **argv) {
 	}
 
 	//load the image and give us our input and output pointers
-	preProcess(&h_rgbaImage, &h_greyImage, &d_rgbaImage, &d_greyImage, input_file);
+	preProcess(&h_rgbaImage, &h_greyImage, &h_linImage, &d_rgbaImage, &d_greyImage, input_file);
 	//call the students' code
 	your_rgba_to_greyscale(h_rgbaImage, d_rgbaImage, d_greyImage, numRows(), numCols());
-    cudaDeviceSynchronize();
+        cudaDeviceSynchronize();
 	cudaGetLastError();
 	printf("\n");
+
+	// Now time linear version
+	double startTime = dtime();
+        float linearFilter[] = {-1.0, -1.0, -1.0, -1.0, 9.0, -1.0, -1.0, -1.0, -1.0};
+	linearSharpen(h_rgbaImage, h_linImage, numRows(), numCols(), linearFilter);
+	printf("Linear runtime: %lf seconds\n", dtime() - startTime);
+
 	postProcess(output_file); //prints gray image
 
      cudaThreadExit();
