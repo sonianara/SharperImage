@@ -122,19 +122,42 @@ void conv1D(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, int num
 	int pix_x = (blockIdx.x * blockDim.x) + threadIdx.x;
 	int pix_y = (blockIdx.y * blockDim.y) + threadIdx.y;
 
+   int local_x = threadIdx.x + 1;
+   int local_y = threadIdx.y + 1;
+
+   __shared__ uchar4 cache[324];
+
 	if (pix_x >= 0 && pix_x < numCols && pix_y >= 0 && pix_y < numRows) { 
 		int oneD = linearize(pix_x, pix_y, numCols, numRows);	
+      cache[local_y * (blockDim.y + 2) + local_x] = rgbaImage[oneD];
+
+      if (threadIdx.x == 0 && threadIdx.y == 0) {
+         cache[0] = rgbaImage[linearize(pix_x - 1, pix_y - 1, numCols, numRows)];
+         cache[(blockDim.x + 1)] = rgbaImage[linearize(pix_x + blockDim.x, pix_y - 1, numCols, numRows)];
+         cache[(blockDim.y + 1) * (blockDim.x + 2)] = rgbaImage[linearize(pix_x - 1, pix_y + blockDim.y, numCols, numRows)];
+         cache[blockDim.x * blockDim.y - 1] = rgbaImage[linearize(pix_x + blockDim.x, pix_y + blockDim.y, numCols, numRows)];
+      }
+     if (threadIdx.x == 0) {
+        cache[(blockDim.x + 2) * local_y] = rgbaImage[linearize(pix_x - 1, pix_y, numCols,numRows)];
+        cache[(blockDim.x + 2) * local_y + (blockDim.y - 1)] = rgbaImage[linearize(pix_x - 1, pix_y + blockDim.y, numCols,numRows)];
+     }
+      if (threadIdx.y == 0) {
+        cache[local_y] = rgbaImage[linearize(pix_x, pix_y - 1, numCols,numRows)];
+        cache[(blockDim.y + 1) * (blockDim.x + 2) + local_x ] = rgbaImage[linearize(pix_x, pix_y + blockDim.y, numCols,numRows)];
+      }
+      __syncthreads();
+
 		float blurValx = 0;
 		float blurValy = 0;
 		float blurValz = 0;
 		for (int i = -1; i <= 1; ++i) {
 			for (int j = -1; j <= 1; ++j) {
-				int imgNdx = linearize(pix_x + j, pix_y + i, numCols, numRows);
-				int filterNdx = linearize(1 +j, 1+ i, 3, 3);
+				int imgNdx = (local_y + j) * (blockDim.y + 2) + (local_x + i);
+				int filterNdx = linearize(1 + j, 1 + i, 3, 3);
 				int weight = M_d[filterNdx];
-				blurValx += rgbaImage[imgNdx].x * weight;
-				blurValy += rgbaImage[imgNdx].y * weight;
-				blurValz += rgbaImage[imgNdx].z * weight;
+				blurValx += cache[imgNdx].x * weight;
+				blurValy += cache[imgNdx].y * weight;
+				blurValz += cache[imgNdx].z * weight;
 			}
 		}
 		greyImage[pix_y * numCols + pix_x].x = check((int)blurValx);
