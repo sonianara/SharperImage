@@ -101,6 +101,7 @@ void postProcess(const std::string& output_file) {
 }
 
 __host__ __device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
+
 __host__ __device__  int indexBounds(int ndx, int maxNdx) {
    return ndx > (maxNdx - 1) ? (maxNdx - 1) : (ndx < 0 ? 0 : ndx);
 }
@@ -144,6 +145,7 @@ void conv1DShared(uchar4* const rgbaImage,uchar4* const greyImage,int numRows, i
 		float blurValx = 0;
 		float blurValy = 0;
 		float blurValz = 0;
+
 		for (int i = -1; i <= 1; ++i) {
 			for (int j = -1; j <= 1; ++j) {
 				int imgNdx = (local_y + j) * (blockDim.y + 2) + (local_x + i);
@@ -241,14 +243,16 @@ int main(int argc, char **argv) {
 
 	// Now time linear version
 	double startTime = dtime();
-        float linearFilter[] = {-1.0, -1.0, -1.0, -1.0, 9.0, -1.0, -1.0, -1.0, -1.0};
+
+   //Filter to be applied 
+   float linearFilter[] = {-1.0, -1.0, -1.0, -1.0, 9.0, -1.0, -1.0, -1.0, -1.0};
 	linearSharpen(h_rgbaImage, h_linImage, numRows(), numCols(), linearFilter);
 	printf("Linear runtime: %lf seconds\n", dtime() - startTime);
 
 	postProcess(output_file); //prints gray image
 
-     cudaThreadExit();
-     return 0;
+   cudaThreadExit();
+   return 0;
 
 }
 

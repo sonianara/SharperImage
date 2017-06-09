@@ -101,7 +101,9 @@ void postProcess(const std::string& output_file) {
 }
 
 __host__ __device__ unsigned char check(int n) {return n > 255 ? 255 : (n < 0 ? 0:n);}
+
 __host__ __device__  int indexBounds(int ndx, int maxNdx) {
+
    return ndx > (maxNdx - 1) ? (maxNdx - 1) : (ndx < 0 ? 0 : ndx);
 }
 
